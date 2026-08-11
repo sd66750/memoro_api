@@ -30,7 +30,7 @@ const SCHEMA_SYNTHESE = {
   additionalProperties: false,
   required: ['points', 'piege', 'mnemo', 'application'],
   properties: {
-    points: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'string' } },
+    points: { type: 'array', items: { type: 'string' } },
     tableau: {
       type: 'object',
       additionalProperties: false,
@@ -83,8 +83,6 @@ const SCHEMA_QCM = {
           enonce: { type: 'string' },
           propositions: {
             type: 'array',
-            minItems: 5,
-            maxItems: 5,
             items: {
               type: 'object',
               additionalProperties: false,
