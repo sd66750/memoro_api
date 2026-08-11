@@ -78,3 +78,33 @@ exports.list = (req, res, next) => {
     res.json(data);
   });
 };
+
+// Régénère les contenus sans nouveau fichier : on crée une nouvelle version du
+// support pointant sur le même PDF (archive l'ancien + ses tentatives, remap des
+// cartes par empreinte), puis relance la génération IA.
+exports.regenerer = async (req, res, next) => {
+  try {
+    const idCours = Number(req.params.idCours);
+    const [rows] = await dbp.query(
+      `SELECT s.nomFichier, s.mimeType, s.tailleOctets, s.nbPages, s.cheminStockage
+         FROM mm_support s JOIN mm_cours c ON c.id = s.idCours
+        WHERE s.idCours = ? AND c.idUtilisateur = ? AND s.estCourant = 1 LIMIT 1`,
+      [idCours, req.user.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Aucun support courant à régénérer.' });
+    if (!hasKey()) return res.status(400).json({ error: 'Génération IA indisponible (clé Anthropic absente).' });
+    const cur = rows[0];
+    await dbp.query('UPDATE mm_support SET estCourant = 0 WHERE idCours = ? AND estCourant = 1', [idCours]);
+    await dbp.query('UPDATE mm_qcm_tentative SET surSupportArchive = 1 WHERE idCours = ?', [idCours]);
+    const [ins] = await dbp.query(
+      `INSERT INTO mm_support (idCours, nomFichier, mimeType, tailleOctets, nbPages, cheminStockage, estCourant)
+       VALUES (?,?,?,?,?,?,1)`,
+      [idCours, cur.nomFichier, cur.mimeType, cur.tailleOctets, cur.nbPages, cur.cheminStockage]
+    );
+    res.status(201).json({ id: ins.insertId, enGeneration: true });
+    genererContenus({ id: ins.insertId, idCours, cheminStockage: cur.cheminStockage })
+      .catch((e) => console.error('Régénération contenus KO:', e.message));
+  } catch (err) {
+    next(err);
+  }
+};

@@ -24,6 +24,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage, limits: { fileSize: 40 * 1024 * 1024 } });
 
 router.post('/cours/:idCours/support', authMiddleware, upload.single('fichier'), controller.upload);
+router.post('/cours/:idCours/regenerer', authMiddleware, controller.regenerer);
 router.get('/cours/:idCours/supports', authMiddleware, controller.list);
 router.get('/supports/:id/fichier', authMiddleware, controller.serve);
 

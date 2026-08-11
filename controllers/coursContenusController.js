@@ -22,7 +22,7 @@ exports.getEntete = async (req, res, next) => {
     if (!c.length) return res.status(404).json({ error: 'Cours introuvable.' });
 
     const [sup] = await db.query(
-      'SELECT id, nomFichier, nbPages, anthropicFileId, deposeLe FROM mm_support WHERE idCours = ? AND estCourant = 1 LIMIT 1',
+      'SELECT id, nomFichier, nbPages, tailleOctets, anthropicFileId, deposeLe FROM mm_support WHERE idCours = ? AND estCourant = 1 LIMIT 1',
       [id]
     );
     const support = sup[0] || null;
@@ -45,10 +45,11 @@ exports.getEntete = async (req, res, next) => {
     }
 
     const maitrise = (await maitriseParCours(req.user.id)).get(id) ?? null;
+    const [[nt]] = await db.query('SELECT COUNT(*) AS n FROM mm_qcm_tentative WHERE idCours = ?', [id]);
     let paliers = [1, 3, 7, 14, 30];
     const [prm] = await db.query('SELECT paliersJson FROM mm_parametre WHERE idUtilisateur = ?', [req.user.id]);
     if (prm[0]?.paliersJson) { try { const p = typeof prm[0].paliersJson === 'string' ? JSON.parse(prm[0].paliersJson) : prm[0].paliersJson; if (Array.isArray(p)) paliers = p; } catch { /* défaut */ } }
-    res.json({ cours: c[0], support, revisions, aSynthese, nbCartes, aQcm, maitrise, paliers });
+    res.json({ cours: c[0], support, revisions, aSynthese, nbCartes, aQcm, maitrise, paliers, nbTentatives: nt.n });
   } catch (err) {
     next(err);
   }
