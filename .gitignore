@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.local
+.env.*.local
+npm-debug.log*
+yarn-error.log*
+
+# Stockage des PDF déposés (hors dépôt, hors web-root)
+uploads/
+storage/
+
+# Divers
+.DS_Store
+*.log
