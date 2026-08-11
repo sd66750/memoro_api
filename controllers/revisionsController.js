@@ -15,7 +15,7 @@ exports.getAujourdhui = async (req, res, next) => {
 
     const [aujourdhui] = await db.query(
       `SELECT r.id, r.idCours, r.indexPalier, r.dueLe, r.statut, r.reportDepuis,
-              c.titre, c.dateCours, m.libelle AS matiereLibelle, m.couleur AS matiereCouleur
+              c.titre, c.dateCours, c.professeur, m.libelle AS matiereLibelle, m.couleur AS matiereCouleur, m.code AS matiereCode
          FROM mm_revision r
          JOIN mm_cours c ON c.id = r.idCours
          LEFT JOIN mm_matiere m ON m.id = c.idMatiere
@@ -65,7 +65,30 @@ exports.getAujourdhui = async (req, res, next) => {
     );
     const serie = calcStreak(faites.map((r) => r.j));
 
-    res.json({ aujourdhui, demain: demain.n, supportsManquants, matieresFragiles, serie });
+    // Paliers (pour libeller J+jour), révisions faites aujourd'hui, matière dominante de demain.
+    let paliers = [1, 3, 7, 14, 30];
+    const [prm] = await db.query('SELECT paliersJson FROM mm_parametre WHERE idUtilisateur = ?', [uid]);
+    if (prm[0]?.paliersJson) { try { const p = typeof prm[0].paliersJson === 'string' ? JSON.parse(prm[0].paliersJson) : prm[0].paliersJson; if (Array.isArray(p)) paliers = p; } catch { /* défaut */ } }
+    const [[fj]] = await db.query("SELECT COUNT(*) AS n FROM mm_revision WHERE idUtilisateur = ? AND statut = 'faite' AND DATE(faitLe) = CURDATE()", [uid]);
+    const [dm] = await db.query(
+      `SELECT m.libelle, m.couleur, COUNT(*) AS n
+         FROM mm_revision r JOIN mm_cours c ON c.id = r.idCours LEFT JOIN mm_matiere m ON m.id = c.idMatiere
+        WHERE r.idUtilisateur = ? AND r.statut = 'due' AND r.dueLe = DATE_ADD(CURDATE(), INTERVAL 1 DAY)
+        GROUP BY m.id ORDER BY n DESC LIMIT 1`,
+      [uid]
+    );
+    const items = aujourdhui.map((r) => ({ ...r, maitrise: parCours.get(r.idCours) ?? null }));
+
+    res.json({
+      aujourdhui: items,
+      demain: demain.n,
+      demainMatiere: dm[0] && dm[0].libelle ? { libelle: dm[0].libelle, couleur: dm[0].couleur, n: dm[0].n } : null,
+      faitesAujourdhui: fj.n,
+      paliers,
+      supportsManquants,
+      matieresFragiles,
+      serie,
+    });
   } catch (err) {
     next(err);
   }

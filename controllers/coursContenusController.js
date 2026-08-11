@@ -45,7 +45,10 @@ exports.getEntete = async (req, res, next) => {
     }
 
     const maitrise = (await maitriseParCours(req.user.id)).get(id) ?? null;
-    res.json({ cours: c[0], support, revisions, aSynthese, nbCartes, aQcm, maitrise });
+    let paliers = [1, 3, 7, 14, 30];
+    const [prm] = await db.query('SELECT paliersJson FROM mm_parametre WHERE idUtilisateur = ?', [req.user.id]);
+    if (prm[0]?.paliersJson) { try { const p = typeof prm[0].paliersJson === 'string' ? JSON.parse(prm[0].paliersJson) : prm[0].paliersJson; if (Array.isArray(p)) paliers = p; } catch { /* défaut */ } }
+    res.json({ cours: c[0], support, revisions, aSynthese, nbCartes, aQcm, maitrise, paliers });
   } catch (err) {
     next(err);
   }

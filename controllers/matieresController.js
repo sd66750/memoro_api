@@ -2,10 +2,11 @@
 const db = require('../config/db');
 
 exports.getAll = (req, res, next) => {
-  const sql = `SELECT id, code, libelle, couleur, coefficient, ordre
-                 FROM mm_matiere
-                WHERE idUtilisateur = ?
-                ORDER BY ordre, libelle`;
+  const sql = `SELECT m.id, m.code, m.libelle, m.couleur, m.coefficient, m.ordre,
+                      (SELECT COUNT(*) FROM mm_cours c WHERE c.idMatiere = m.id) AS nbCours
+                 FROM mm_matiere m
+                WHERE m.idUtilisateur = ?
+                ORDER BY m.ordre, m.libelle`;
   db.query(sql, [req.user.id], (err, data) => {
     if (err) return next(err);
     res.json(data);

@@ -3,15 +3,16 @@
 // fichier une fois (Files API), puis trois générations référencent le même
 // file_id avec cache_control pour lire depuis le cache (brief §7).
 //
-// Pièges respectés : modèle 'claude-opus-5' (sans suffixe) ; PAS de citations
-// (incompatibles avec output_config.format) — les n° de diapo sont des champs du
-// schéma ; pas de temperature/top_p (pilotage par effort) ; usage stocké.
+// Modèle = Haiku 4.5 (comme HomeFlow), configurable via MEMORO_GEN_MODEL. La
+// sortie structurée passe par tool-use (portable), pas par output_config (spécifique
+// opus-5, qui refuse minItems>1). Les n° de diapo sont des champs du schéma.
 const fs = require('fs');
 const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('../config/db').promise();
 
-const MODEL = 'claude-opus-5';
+// Modèle configurable (défaut = Haiku 4.5, comme HomeFlow) pour le coût/latence.
+const MODEL = process.env.MEMORO_GEN_MODEL || 'claude-haiku-4-5-20251001';
 const FILES_BETA = 'files-api-2025-04-14';
 
 const hasKey = () => !!process.env.ANTHROPIC_API_KEY;
@@ -104,20 +105,16 @@ const SCHEMA_QCM = {
 
 const empreinte = (recto) => crypto.createHash('sha256').update(String(recto).trim().toLowerCase()).digest('hex');
 
-function extractJson(res) {
-  if (res && res.output && typeof res.output === 'object') return res.output;
-  const blocks = Array.isArray(res?.content) ? res.content : [];
-  const txt = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
-  return JSON.parse(txt);
-}
-
-async function generateOne(client, fileId, schema, consigne) {
+// Sortie structurée via tool-use (portable sur tous les modèles, dont Haiku) :
+// on force l'appel d'un outil dont l'input_schema est le schéma voulu, et on lit
+// directement l'objet `input`. Le PDF est fourni en document (Files API) + cache.
+async function generateOne(client, fileId, schema, consigne, toolName) {
   const res = await client.beta.messages.create({
     model: MODEL,
-    max_tokens: 16000,
+    max_tokens: 12000,
     betas: [FILES_BETA],
-    thinking: { type: 'adaptive' },
-    output_config: { effort: 'high', format: { type: 'json_schema', schema } },
+    tools: [{ name: toolName, description: 'Enregistre le résultat structuré demandé.', input_schema: schema }],
+    tool_choice: { type: 'tool', name: toolName },
     messages: [
       {
         role: 'user',
@@ -128,7 +125,9 @@ async function generateOne(client, fileId, schema, consigne) {
       },
     ],
   });
-  return { data: extractJson(res), usage: res.usage || {} };
+  const bloc = (res.content || []).find((b) => b.type === 'tool_use');
+  if (!bloc || !bloc.input) throw new Error('Réponse sans tool_use structuré.');
+  return { data: bloc.input, usage: res.usage || {} };
 }
 
 /**
@@ -153,7 +152,7 @@ async function genererContenus(support) {
 
   // 2. Fiche de synthèse.
   try {
-    const s = await generateOne(client, uploaded.id, SCHEMA_SYNTHESE, CONSIGNE_SYNTHESE);
+    const s = await generateOne(client, uploaded.id, SCHEMA_SYNTHESE, CONSIGNE_SYNTHESE, 'enregistrer_fiche');
     await db.query(
       `INSERT INTO mm_synthese (idCours, idSupport, contenuJson, modele, tokensEntree, tokensSortie)
        VALUES (?,?,?,?,?,?)`,
@@ -165,7 +164,7 @@ async function genererContenus(support) {
 
   // 3. Cartes mémo (+ report de l'état d'apprentissage par empreinte au remplacement).
   try {
-    const c = await generateOne(client, uploaded.id, SCHEMA_CARTES, CONSIGNE_CARTES);
+    const c = await generateOne(client, uploaded.id, SCHEMA_CARTES, CONSIGNE_CARTES, 'enregistrer_cartes');
     for (const carte of c.data.cartes || []) {
       await db.query(
         `INSERT INTO mm_carte (idCours, idSupport, recto, verso, diapo, empreinteQuestion)
@@ -187,7 +186,7 @@ async function genererContenus(support) {
 
   // 4. QCM.
   try {
-    const q = await generateOne(client, uploaded.id, SCHEMA_QCM, CONSIGNE_QCM);
+    const q = await generateOne(client, uploaded.id, SCHEMA_QCM, CONSIGNE_QCM, 'enregistrer_qcm');
     const [qi] = await db.query('INSERT INTO mm_qcm (idCours, idSupport) VALUES (?,?)', [idCours, idSupport]);
     const idQcm = qi.insertId;
     const questions = q.data.questions || [];
