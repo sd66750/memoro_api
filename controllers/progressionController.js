@@ -43,11 +43,11 @@ exports.getProgression = async (req, res, next) => {
     });
 
     const [charge7j] = await db.query(
-      "SELECT dueLe, COUNT(*) AS n FROM mm_revision WHERE idUtilisateur = ? AND statut IN ('due','reportee') AND dueLe BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 6 DAY) GROUP BY dueLe ORDER BY dueLe",
+      "SELECT dueLe, COUNT(*) AS n, SUM(dureeEstimeeMin) AS min FROM mm_revision WHERE idUtilisateur = ? AND statut IN ('due','reportee') AND dueLe BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 6 DAY) GROUP BY dueLe ORDER BY dueLe",
       [uid]
     );
 
-    const [prm] = await db.query('SELECT paliersJson, modeExigeant, seuilQcm, plafondQuotidien FROM mm_parametre WHERE idUtilisateur = ?', [uid]);
+    const [prm] = await db.query('SELECT paliersJson, modeExigeant, seuilQcm, plafondQuotidien, budgetQuotidienMin FROM mm_parametre WHERE idUtilisateur = ?', [uid]);
     let paliers = [1, 3, 7, 14, 30];
     const raw = prm[0]?.paliersJson;
     if (raw) { try { const p = typeof raw === 'string' ? JSON.parse(raw) : raw; if (Array.isArray(p)) paliers = p; } catch { /* défaut */ } }
@@ -61,6 +61,7 @@ exports.getProgression = async (req, res, next) => {
         modeExigeant: prm[0]?.modeExigeant ? 1 : 0,
         seuilQcm: prm[0]?.seuilQcm ?? 70,
         plafondQuotidien: prm[0]?.plafondQuotidien ?? null,
+        budgetQuotidienMin: prm[0]?.budgetQuotidienMin ?? 90,
       },
     });
   } catch (err) {
@@ -71,24 +72,27 @@ exports.getProgression = async (req, res, next) => {
 exports.updateParametres = async (req, res, next) => {
   try {
     const uid = req.user.id;
-    const { paliers, modeExigeant, seuilQcm, plafondQuotidien } = req.body || {};
+    const { paliers, modeExigeant, seuilQcm, plafondQuotidien, budgetQuotidienMin } = req.body || {};
     const paliersJson = Array.isArray(paliers)
       ? JSON.stringify(paliers.map(Number).filter((n) => Number.isFinite(n) && n > 0))
       : null;
+    const budget = budgetQuotidienMin != null && budgetQuotidienMin !== '' ? Math.max(1, Number(budgetQuotidienMin)) : 90;
     await db.query(
-      `INSERT INTO mm_parametre (idUtilisateur, paliersJson, modeExigeant, seuilQcm, plafondQuotidien)
-       VALUES (?,?,?,?,?)
+      `INSERT INTO mm_parametre (idUtilisateur, paliersJson, modeExigeant, seuilQcm, plafondQuotidien, budgetQuotidienMin)
+       VALUES (?,?,?,?,?,?)
        ON DUPLICATE KEY UPDATE
          paliersJson = COALESCE(VALUES(paliersJson), paliersJson),
          modeExigeant = VALUES(modeExigeant),
          seuilQcm = VALUES(seuilQcm),
-         plafondQuotidien = VALUES(plafondQuotidien)`,
+         plafondQuotidien = VALUES(plafondQuotidien),
+         budgetQuotidienMin = VALUES(budgetQuotidienMin)`,
       [
         uid,
         paliersJson || '[1,3,7,14,30]',
         modeExigeant ? 1 : 0,
         seuilQcm != null ? Number(seuilQcm) : 70,
         plafondQuotidien != null && plafondQuotidien !== '' ? Number(plafondQuotidien) : null,
+        budget,
       ]
     );
     res.json({ ok: true });

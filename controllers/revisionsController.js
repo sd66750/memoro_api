@@ -2,6 +2,8 @@
 const db = require('../config/db').promise();
 const { maitriseParCours } = require('../services/maitrise');
 const { halveFromToday, calcStreak } = require('../utils/dates');
+const { lireBudget, chargeParJour, placer, addDaysISO, recalculerPlanning } = require('../services/paliers');
+const { deriveMax } = require('../services/charge');
 
 exports.getAujourdhui = async (req, res, next) => {
   try {
@@ -14,13 +16,13 @@ exports.getAujourdhui = async (req, res, next) => {
     );
 
     const [aujourdhui] = await db.query(
-      `SELECT r.id, r.idCours, r.indexPalier, r.dueLe, r.statut, r.reportDepuis,
+      `SELECT r.id, r.idCours, r.indexPalier, r.dueLe, r.dueLeIdeal, r.dureeEstimeeMin, r.statut, r.reportDepuis,
               c.titre, c.dateCours, c.professeur, m.libelle AS matiereLibelle, m.couleur AS matiereCouleur, m.code AS matiereCode
          FROM mm_revision r
          JOIN mm_cours c ON c.id = r.idCours
          LEFT JOIN mm_matiere m ON m.id = c.idMatiere
         WHERE r.idUtilisateur = ? AND r.statut IN ('due','reportee') AND r.dueLe <= CURDATE()
-        ORDER BY (r.statut = 'reportee') DESC, r.dueLe, c.titre`,
+        ORDER BY (r.statut = 'reportee') DESC, COALESCE(m.coefficient, 1) DESC, r.indexPalier, r.dueLe, c.titre`,
       [uid]
     );
 
@@ -79,11 +81,35 @@ exports.getAujourdhui = async (req, res, next) => {
     );
     const items = aujourdhui.map((r) => ({ ...r, maitrise: parCours.get(r.idCours) ?? null }));
 
+    // Budget d'absorption : temps restant du jour vs budget, temps déjà fait,
+    // et alerte de surcharge structurelle sur les 7 prochains jours.
+    const budgetMin = await lireBudget(uid);
+    const chargeMin = items.reduce((s, r) => s + (Number(r.dureeEstimeeMin) || 0), 0);
+    const [[fm]] = await db.query(
+      "SELECT COALESCE(SUM(dureeEstimeeMin),0) AS min FROM mm_revision WHERE idUtilisateur = ? AND statut = 'faite' AND DATE(faitLe) = CURDATE()",
+      [uid]
+    );
+    const faitMin = Number(fm.min) || 0;
+    const [charge7j] = await db.query(
+      "SELECT dueLe, SUM(dureeEstimeeMin) AS min FROM mm_revision WHERE idUtilisateur = ? AND statut IN ('due','reportee') AND dueLe BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 6 DAY) GROUP BY dueLe",
+      [uid]
+    );
+    const total7 = charge7j.reduce((s, r) => s + (Number(r.min) || 0), 0);
+    const capacite7 = budgetMin * 7;
+    const joursSatures = charge7j.filter((r) => Number(r.min) > budgetMin).length;
+    const surcharge = total7 > capacite7 || joursSatures > 0
+      ? { chargeMin: total7, capaciteMin: capacite7, joursSatures }
+      : null;
+
     res.json({
       aujourdhui: items,
       demain: demain.n,
       demainMatiere: dm[0] && dm[0].libelle ? { libelle: dm[0].libelle, couleur: dm[0].couleur, n: dm[0].n } : null,
       faitesAujourdhui: fj.n,
+      budgetMin,
+      chargeMin,
+      faitMin,
+      surcharge,
       paliers,
       supportsManquants,
       matieresFragiles,
@@ -127,18 +153,33 @@ exports.valider = async (req, res, next) => {
 
     await db.query("UPDATE mm_revision SET statut = 'faite', faitLe = NOW() WHERE id = ?", [rev[0].id]);
 
-    // Le score module le palier : < 50 % → l'échéance suivante est rapprochée de moitié.
+    // Le score module le palier : < 50 % → l'échéance suivante est rapprochée de
+    // moitié, puis replacée sous budget (le rattrapage ne doit pas recréer un pic).
     if (pctJour != null && pctJour < 50) {
       const [next] = await db.query(
-        "SELECT id, dueLe FROM mm_revision WHERE idUtilisateur = ? AND idCours = ? AND indexPalier > ? AND statut = 'due' ORDER BY indexPalier LIMIT 1",
+        "SELECT id, dueLe, indexPalier, dureeEstimeeMin FROM mm_revision WHERE idUtilisateur = ? AND idCours = ? AND indexPalier > ? AND statut = 'due' ORDER BY indexPalier LIMIT 1",
         [uid, idCours, rev[0].indexPalier]
       );
       if (next.length) {
-        await db.query('UPDATE mm_revision SET dueLe = ? WHERE id = ?', [halveFromToday(next[0].dueLe), next[0].id]);
+        const nd = halveFromToday(next[0].dueLe);
+        const dm = deriveMax(next[0].indexPalier);
+        const charge = await chargeParJour(uid, nd, addDaysISO(nd, dm));
+        const { dueLe } = placer(nd, Number(next[0].dureeEstimeeMin) || 0, await lireBudget(uid), charge, dm);
+        await db.query('UPDATE mm_revision SET dueLe = ? WHERE id = ?', [dueLe, next[0].id]);
       }
     }
 
     res.json({ ok: true, idRevision: rev[0].id, pourcentageQcm: pctJour });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Recalcule (replace) le futur sous budget — lissage à la demande. Passé/fait figés.
+exports.recalculer = async (req, res, next) => {
+  try {
+    const n = await recalculerPlanning(req.user.id);
+    res.json({ ok: true, replanifiees: n });
   } catch (err) {
     next(err);
   }

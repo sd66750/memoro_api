@@ -8,6 +8,7 @@ const revisions = require('../controllers/revisionsController');
 
 router.use(authMiddleware);
 router.get('/aujourdhui', revisions.getAujourdhui);
+router.post('/planning/recalculer', revisions.recalculer);
 router.get('/progression', progression.getProgression);
 router.put('/parametres', progression.updateParametres);
 router.post('/revision-libre', progression.revisionLibre);

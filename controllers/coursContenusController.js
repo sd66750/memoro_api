@@ -13,7 +13,7 @@ exports.getEntete = async (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const [c] = await db.query(
-      `SELECT c.id, c.titre, c.professeur, c.dateCours, c.heureDebut, c.heureFin, c.salle, c.idMatiere,
+      `SELECT c.id, c.titre, c.professeur, c.dateCours, c.heureDebut, c.heureFin, c.salle, c.idMatiere, c.niveauCharge,
               m.libelle AS matiereLibelle, m.couleur AS matiereCouleur, m.code AS matiereCode
          FROM mm_cours c LEFT JOIN mm_matiere m ON m.id = c.idMatiere
         WHERE c.id = ? AND c.idUtilisateur = ?`,
@@ -28,7 +28,7 @@ exports.getEntete = async (req, res, next) => {
     const support = sup[0] || null;
 
     const [revisions] = await db.query(
-      "SELECT id, indexPalier, dueLe, statut, faitLe FROM mm_revision WHERE idCours = ? ORDER BY indexPalier",
+      "SELECT id, indexPalier, dueLe, dueLeIdeal, dureeEstimeeMin, statut, faitLe FROM mm_revision WHERE idCours = ? ORDER BY indexPalier",
       [id]
     );
 
