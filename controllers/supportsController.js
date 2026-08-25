@@ -19,7 +19,19 @@ exports.upload = async (req, res, next) => {
       return res.status(404).json({ error: 'Cours introuvable.' });
     }
     if (!req.file) return res.status(400).json({ error: 'Aucun fichier reçu.' });
-    if (req.file.mimetype !== 'application/pdf') {
+    // Vérifie que c'est un PDF par le CONTENU (octets %PDF), pas seulement par le
+    // type MIME annoncé par le navigateur : Chrome/Windows envoie souvent les PDF
+    // en "application/octet-stream", ce qui faisait échouer le dépôt à tort.
+    let entete = '';
+    try {
+      const fd = fs.openSync(req.file.path, 'r');
+      const buf = Buffer.alloc(5);
+      fs.readSync(fd, buf, 0, 5, 0);
+      fs.closeSync(fd);
+      entete = buf.toString('latin1');
+    } catch { /* lecture impossible → traité comme non-PDF ci-dessous */ }
+    const estPdf = entete.startsWith('%PDF') || /\.pdf$/i.test(req.file.originalname || '');
+    if (!estPdf) {
       fs.unlink(req.file.path, () => {});
       return res.status(400).json({ error: 'Le support doit être un PDF.' });
     }
