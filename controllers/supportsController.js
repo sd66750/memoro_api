@@ -3,7 +3,6 @@
 // cours (ne comptent plus dans la maîtrise), génère les paliers J si c'est le
 // premier support, puis lance la génération IA en tâche de fond.
 const fs = require('fs');
-const path = require('path');
 const db = require('../config/db');
 const dbp = db.promise();
 const { genererRevisions } = require('../services/paliers');
@@ -74,15 +73,15 @@ exports.serve = async (req, res, next) => {
     if (!rows.length) return res.status(404).json({ error: 'Support introuvable.' });
     const f = rows[0];
     if (!fs.existsSync(f.cheminStockage)) return res.status(404).json({ error: 'Fichier absent du stockage.' });
-    // sendFile pose Content-Length + Accept-Ranges et répond en 206 aux requêtes
-    // Range → le lecteur PDF du navigateur charge progressivement (plus de blocage
-    // à ~80 % dû à l'ancien pipe() sans Content-Length ni support Range).
-    res.sendFile(path.resolve(f.cheminStockage), {
-      headers: {
-        'Content-Type': f.mimeType || 'application/pdf',
-        'Content-Disposition': `inline; filename="${encodeURIComponent(f.nomFichier)}"`,
-      },
-    }, (err) => { if (err && !res.headersSent) next(err); });
+    // On sert le fichier COMPLET en 200 avec un Content-Length explicite (sans lui,
+    // le lecteur PDF du navigateur reste bloqué à ~80 %). On n'annonce PAS le support
+    // des Range : les réponses 206/Range passent mal à travers le proxy nginx et
+    // empêchaient tout affichage. Les PDF sont compressés (~8-11 Mo) → un chargement
+    // complet est instantané.
+    res.setHeader('Content-Type', f.mimeType || 'application/pdf');
+    res.setHeader('Content-Length', fs.statSync(f.cheminStockage).size);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(f.nomFichier)}"`);
+    fs.createReadStream(f.cheminStockage).pipe(res);
   } catch (err) {
     next(err);
   }
