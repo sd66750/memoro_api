@@ -1,6 +1,7 @@
 // Lecture des contenus d'un cours (page de cours) : en-tête + paliers, fiche de
 // synthèse, cartes mémo (avec état d'apprentissage), QCM (sans les réponses, pour
 // une mesure honnête), et historique des tentatives.
+const path = require('path');
 const db = require('../config/db').promise();
 const { maitriseParCours } = require('../services/maitrise');
 
@@ -22,10 +23,16 @@ exports.getEntete = async (req, res, next) => {
     if (!c.length) return res.status(404).json({ error: 'Cours introuvable.' });
 
     const [sup] = await db.query(
-      'SELECT id, nomFichier, nbPages, tailleOctets, anthropicFileId, deposeLe FROM mm_support WHERE idCours = ? AND estCourant = 1 LIMIT 1',
+      'SELECT id, nomFichier, nbPages, tailleOctets, anthropicFileId, deposeLe, cheminStockage FROM mm_support WHERE idCours = ? AND estCourant = 1 LIMIT 1',
       [id]
     );
     const support = sup[0] || null;
+    if (support) {
+      // Nom de fichier stocké (non devinable) pour un service direct par nginx
+      // depuis le disque (contourne le transfert lent à travers le proxy).
+      support.fichierStocke = path.basename(support.cheminStockage || '');
+      delete support.cheminStockage; // ne pas exposer le chemin disque complet
+    }
 
     const [revisions] = await db.query(
       "SELECT id, indexPalier, dueLe, dueLeIdeal, dureeEstimeeMin, statut, faitLe FROM mm_revision WHERE idCours = ? ORDER BY indexPalier",
