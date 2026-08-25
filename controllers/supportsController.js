@@ -78,6 +78,10 @@ exports.serve = async (req, res, next) => {
     // des Range : les réponses 206/Range passent mal à travers le proxy nginx et
     // empêchaient tout affichage. Les PDF sont compressés (~8-11 Mo) → un chargement
     // complet est instantané.
+    // Désactive Nagle sur le socket : le pipe d'un fichier via un proxy (nginx/traefik)
+    // subissait un couple Nagle + delayed-ACK qui écroulait le débit à ~7 Ko/s
+    // (invisible en loopback où le RTT est nul). setNoDelay = envoi immédiat.
+    if (res.socket) res.socket.setNoDelay(true);
     res.setHeader('Content-Type', f.mimeType || 'application/pdf');
     res.setHeader('Content-Length', fs.statSync(f.cheminStockage).size);
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(f.nomFichier)}"`);
