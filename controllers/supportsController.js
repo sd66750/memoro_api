@@ -8,6 +8,7 @@ const dbp = db.promise();
 const { genererRevisions } = require('../services/paliers');
 const { genererContenus, hasKey } = require('../services/generation');
 const { countPages } = require('../utils/pdf');
+const { compressPdfInPlace } = require('../utils/pdfCompress');
 
 exports.upload = async (req, res, next) => {
   try {
@@ -23,6 +24,9 @@ exports.upload = async (req, res, next) => {
       return res.status(400).json({ error: 'Le support doit être un PDF.' });
     }
 
+    // Compression Ghostscript (/ebook 150 dpi) : réduit le stockage et fait repasser
+    // les gros scans sous la limite IA, sans dégrader la lisibilité OCR. Non bloquant.
+    const tailleOctets = await compressPdfInPlace(req.file.path, req.file.size);
     const nbPages = countPages(fs.readFileSync(req.file.path));
 
     // Archive le support courant (on n'en supprime jamais) et les tentatives passées.
@@ -32,7 +36,7 @@ exports.upload = async (req, res, next) => {
     const [ins] = await dbp.query(
       `INSERT INTO mm_support (idCours, nomFichier, mimeType, tailleOctets, nbPages, cheminStockage, estCourant)
        VALUES (?,?,?,?,?,?,1)`,
-      [idCours, req.file.originalname, req.file.mimetype, req.file.size, nbPages, req.file.path]
+      [idCours, req.file.originalname, req.file.mimetype, tailleOctets, nbPages, req.file.path]
     );
     const idSupport = ins.insertId;
 
@@ -43,7 +47,7 @@ exports.upload = async (req, res, next) => {
     // les paliers J fonctionnent, mais on n'envoie pas en génération IA (échec
     // garanti) et on prévient le front plutôt que de laisser un échec muet.
     const MAX_IA_OCTETS = 32 * 1024 * 1024;
-    const pdfTropLourdIA = req.file.size > MAX_IA_OCTETS;
+    const pdfTropLourdIA = tailleOctets > MAX_IA_OCTETS;
     const enGeneration = hasKey() && !pdfTropLourdIA;
 
     res.status(201).json({ id: idSupport, nbPages, enGeneration, pdfTropLourdIA });
