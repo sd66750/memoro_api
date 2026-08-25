@@ -1,7 +1,9 @@
 // Cours — CRUD cloisonné par utilisateur + liste par plage de dates (agenda) +
 // duplication d'une semaine sur l'autre (brief §8). Un cours peut exister sans
 // support ; aSupport indique s'il possède un PDF courant.
+const fs = require('fs');
 const db = require('../config/db');
+const dbp = db.promise();
 const { majDureesCours } = require('../services/paliers');
 
 const NIVEAUX = ['leger', 'moyen', 'dense', 'tres_dense'];
@@ -72,12 +74,24 @@ exports.update = (req, res, next) => {
   });
 };
 
-exports.remove = (req, res, next) => {
-  db.query('DELETE FROM mm_cours WHERE id = ? AND idUtilisateur = ?', [req.params.id, req.user.id], (err, result) => {
-    if (err) return next(err);
+exports.remove = async (req, res, next) => {
+  try {
+    // Récupère les fichiers PDF du cours AVANT le DELETE : la BDD est nettoyée en
+    // cascade par les FK (supports, révisions, cartes, QCM, synthèses), mais pas les
+    // fichiers sur le disque — on les efface nous-mêmes pour éviter les orphelins.
+    const [supports] = await dbp.query(
+      'SELECT s.cheminStockage FROM mm_support s JOIN mm_cours c ON c.id = s.idCours WHERE s.idCours = ? AND c.idUtilisateur = ?',
+      [req.params.id, req.user.id],
+    );
+    const [result] = await dbp.query('DELETE FROM mm_cours WHERE id = ? AND idUtilisateur = ?', [req.params.id, req.user.id]);
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Cours introuvable.' });
+    for (const s of supports) {
+      if (s.cheminStockage) fs.unlink(s.cheminStockage, () => {}); // best effort
+    }
     res.json({ ok: true });
-  });
+  } catch (err) {
+    next(err);
+  }
 };
 
 // Copie les cours d'une semaine (lundi→dimanche) vers une autre, dates décalées.
