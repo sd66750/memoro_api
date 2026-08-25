@@ -3,6 +3,7 @@
 // cours (ne comptent plus dans la maîtrise), génère les paliers J si c'est le
 // premier support, puis lance la génération IA en tâche de fond.
 const fs = require('fs');
+const path = require('path');
 const db = require('../config/db');
 const dbp = db.promise();
 const { genererRevisions } = require('../services/paliers');
@@ -73,9 +74,15 @@ exports.serve = async (req, res, next) => {
     if (!rows.length) return res.status(404).json({ error: 'Support introuvable.' });
     const f = rows[0];
     if (!fs.existsSync(f.cheminStockage)) return res.status(404).json({ error: 'Fichier absent du stockage.' });
-    res.setHeader('Content-Type', f.mimeType || 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(f.nomFichier)}"`);
-    fs.createReadStream(f.cheminStockage).pipe(res);
+    // sendFile pose Content-Length + Accept-Ranges et répond en 206 aux requêtes
+    // Range → le lecteur PDF du navigateur charge progressivement (plus de blocage
+    // à ~80 % dû à l'ancien pipe() sans Content-Length ni support Range).
+    res.sendFile(path.resolve(f.cheminStockage), {
+      headers: {
+        'Content-Type': f.mimeType || 'application/pdf',
+        'Content-Disposition': `inline; filename="${encodeURIComponent(f.nomFichier)}"`,
+      },
+    }, (err) => { if (err && !res.headersSent) next(err); });
   } catch (err) {
     next(err);
   }
