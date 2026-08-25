@@ -21,9 +21,24 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`);
   },
 });
-const upload = multer({ storage, limits: { fileSize: 40 * 1024 * 1024 } });
+const MAX_PDF_MO = 100;
+const upload = multer({ storage, limits: { fileSize: MAX_PDF_MO * 1024 * 1024 } });
 
-router.post('/cours/:idCours/support', authMiddleware, upload.single('fichier'), controller.upload);
+// Enveloppe multer pour renvoyer une erreur claire (413) si le PDF est trop gros,
+// au lieu d'une erreur générique remontée par le gestionnaire global.
+function uploadPdf(req, res, next) {
+  upload.single('fichier')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: `PDF trop volumineux (maximum ${MAX_PDF_MO} Mo).` });
+      }
+      return res.status(400).json({ error: err.message || "Échec de l'envoi du fichier." });
+    }
+    next();
+  });
+}
+
+router.post('/cours/:idCours/support', authMiddleware, uploadPdf, controller.upload);
 router.post('/cours/:idCours/regenerer', authMiddleware, controller.regenerer);
 router.get('/cours/:idCours/supports', authMiddleware, controller.list);
 router.get('/supports/:id/fichier', authMiddleware, controller.serve);

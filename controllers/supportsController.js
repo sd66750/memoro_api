@@ -39,11 +39,20 @@ exports.upload = async (req, res, next) => {
     // Paliers J : uniquement au premier support (idempotent).
     await genererRevisions(req.user.id, idCours, rows[0].dateCours);
 
-    res.status(201).json({ id: idSupport, nbPages, enGeneration: hasKey() });
+    // L'API Claude plafonne les PDF (~32 Mo). Au-delà : le dépôt, le visionnage et
+    // les paliers J fonctionnent, mais on n'envoie pas en génération IA (échec
+    // garanti) et on prévient le front plutôt que de laisser un échec muet.
+    const MAX_IA_OCTETS = 32 * 1024 * 1024;
+    const pdfTropLourdIA = req.file.size > MAX_IA_OCTETS;
+    const enGeneration = hasKey() && !pdfTropLourdIA;
+
+    res.status(201).json({ id: idSupport, nbPages, enGeneration, pdfTropLourdIA });
 
     // Génération IA en tâche de fond : ne bloque pas la réponse.
-    genererContenus({ id: idSupport, idCours, cheminStockage: req.file.path })
-      .catch((e) => console.error('Génération contenus KO:', e.message));
+    if (enGeneration) {
+      genererContenus({ id: idSupport, idCours, cheminStockage: req.file.path })
+        .catch((e) => console.error('Génération contenus KO:', e.message));
+    }
   } catch (err) {
     next(err);
   }
