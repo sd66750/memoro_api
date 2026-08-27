@@ -6,6 +6,7 @@ const controller = require('../controllers/qcmController');
 
 router.use(authMiddleware);
 router.get('/:id/take', controller.take);
+router.get('/:id/corrige', controller.corrige);
 router.post('/:id/tentative', controller.soumettre);
 
 module.exports = router;

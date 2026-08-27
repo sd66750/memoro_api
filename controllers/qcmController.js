@@ -28,6 +28,31 @@ exports.take = async (req, res, next) => {
   }
 };
 
+// Corrigé d'un QCM (bonnes réponses + explications), pour la révélation « Voir la
+// réponse » question par question (mode révision, non comptabilisé). Cloisonné.
+exports.corrige = async (req, res, next) => {
+  try {
+    const idQcm = Number(req.params.id);
+    const [q] = await db.query(
+      `SELECT qc.id FROM mm_qcm qc JOIN mm_cours c ON c.id = qc.idCours AND c.idUtilisateur = ? WHERE qc.id = ?`,
+      [req.user.id, idQcm]
+    );
+    if (!q.length) return res.status(404).json({ error: 'QCM introuvable.' });
+    const [questions] = await db.query('SELECT id FROM mm_qcm_question WHERE idQcm = ? ORDER BY ordre, id', [idQcm]);
+    const ids = questions.map((x) => x.id);
+    let props = [];
+    if (ids.length) {
+      const [p] = await db.query('SELECT id, idQuestion, lettre, estCorrecte, explication, diapo FROM mm_qcm_proposition WHERE idQuestion IN (?)', [ids]);
+      props = p;
+    }
+    const byQ = {};
+    for (const p of props) (byQ[p.idQuestion] ??= []).push({ id: p.id, lettre: p.lettre, estCorrecte: !!p.estCorrecte, explication: p.explication, diapo: p.diapo });
+    res.json({ id: idQcm, corrige: questions.map((x) => ({ idQuestion: x.id, propositions: byQ[x.id] || [] })) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 exports.soumettre = async (req, res, next) => {
   try {
     const idQcm = Number(req.params.id);
