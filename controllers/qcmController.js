@@ -2,6 +2,32 @@
 // rien par question), score, enregistrement de la tentative et des réponses.
 const db = require('../config/db').promise();
 
+// Questions d'un QCM précis (sans les réponses), pour le passer. Cloisonné utilisateur.
+exports.take = async (req, res, next) => {
+  try {
+    const idQcm = Number(req.params.id);
+    const [q] = await db.query(
+      `SELECT qc.id FROM mm_qcm qc
+         JOIN mm_cours c ON c.id = qc.idCours AND c.idUtilisateur = ?
+        WHERE qc.id = ?`,
+      [req.user.id, idQcm]
+    );
+    if (!q.length) return res.status(404).json({ error: 'QCM introuvable.' });
+    const [questions] = await db.query('SELECT id, enonce, ordre FROM mm_qcm_question WHERE idQcm = ? ORDER BY ordre, id', [idQcm]);
+    const ids = questions.map((x) => x.id);
+    let props = [];
+    if (ids.length) {
+      const [p] = await db.query('SELECT id, idQuestion, lettre, texte FROM mm_qcm_proposition WHERE idQuestion IN (?) ORDER BY idQuestion, lettre', [ids]);
+      props = p;
+    }
+    const byQ = {};
+    for (const p of props) (byQ[p.idQuestion] ??= []).push({ id: p.id, lettre: p.lettre, texte: p.texte });
+    res.json({ id: idQcm, questions: questions.map((x) => ({ id: x.id, enonce: x.enonce, propositions: byQ[x.id] || [] })) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 exports.soumettre = async (req, res, next) => {
   try {
     const idQcm = Number(req.params.id);

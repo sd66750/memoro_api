@@ -26,6 +26,10 @@ const CONSIGNE_CARTES = `${CONSIGNE_COMMUNE} Produis des cartes mémo de rappel 
 
 const CONSIGNE_QCM = `${CONSIGNE_COMMUNE} Produis un QCM au format concours français : chaque question a exactement 5 propositions A à E, avec réponses multiples possibles ; pour chaque proposition, indique si elle est correcte, donne une explication et le numéro de diapositive. Vise une dizaine de questions couvrant l'ensemble du cours.`;
 
+// QCM supplémentaire (bouton « Générer un nouveau QCM ») : on demande explicitement
+// de varier les questions/angles par rapport au QCM standard.
+const CONSIGNE_QCM_NOUVEAU = `${CONSIGNE_QCM} C'est un QCM SUPPLÉMENTAIRE : propose des questions DIFFÉRENTES, en variant les notions abordées et les diapositives couvertes, pour retester le cours sous d'autres angles.`;
+
 const SCHEMA_SYNTHESE = {
   type: 'object',
   additionalProperties: false,
@@ -130,6 +134,52 @@ async function generateOne(client, fileId, schema, consigne, toolName) {
   return { data: bloc.input, usage: res.usage || {} };
 }
 
+// Insère un QCM (mm_qcm + questions + propositions) et renvoie son id.
+async function insererQcm(idCours, idSupport, questions) {
+  const [qi] = await db.query('INSERT INTO mm_qcm (idCours, idSupport) VALUES (?,?)', [idCours, idSupport]);
+  const idQcm = qi.insertId;
+  for (let i = 0; i < questions.length; i++) {
+    const ques = questions[i];
+    const [ri] = await db.query('INSERT INTO mm_qcm_question (idQcm, enonce, ordre) VALUES (?,?,?)', [idQcm, ques.enonce, i]);
+    const idQuestion = ri.insertId;
+    for (const p of ques.propositions || []) {
+      await db.query(
+        `INSERT INTO mm_qcm_proposition (idQuestion, lettre, texte, estCorrecte, explication, diapo)
+         VALUES (?,?,?,?,?,?)`,
+        [idQuestion, p.lettre, p.texte, p.estCorrecte ? 1 : 0, p.explication ?? null, p.diapo ?? null]
+      );
+    }
+  }
+  return idQcm;
+}
+
+/**
+ * Génère UN QCM supplémentaire sur un support existant, sans toucher aux autres
+ * contenus ni archiver quoi que ce soit (bouton « Générer un nouveau QCM »).
+ * Réutilise le fichier déjà téléversé ; re-téléverse une fois si le file_id a expiré.
+ */
+async function genererQcm(support) {
+  if (!hasKey()) throw new Error('Clé Anthropic absente.');
+  const client = new Anthropic();
+  const { id: idSupport, idCours, cheminStockage } = support;
+
+  const televerse = async () => {
+    const up = await client.beta.files.upload({ file: fs.createReadStream(cheminStockage), betas: [FILES_BETA] });
+    await db.query('UPDATE mm_support SET anthropicFileId = ? WHERE id = ?', [up.id, idSupport]);
+    return up.id;
+  };
+
+  let fileId = support.anthropicFileId || (await televerse());
+  let q;
+  try {
+    q = await generateOne(client, fileId, SCHEMA_QCM, CONSIGNE_QCM_NOUVEAU, 'enregistrer_qcm');
+  } catch {
+    fileId = await televerse(); // file_id expiré/invalide → nouvelle tentative
+    q = await generateOne(client, fileId, SCHEMA_QCM, CONSIGNE_QCM_NOUVEAU, 'enregistrer_qcm');
+  }
+  return insererQcm(idCours, idSupport, q.data.questions || []);
+}
+
 /**
  * Génère les 3 contenus pour un support fraîchement déposé. Best-effort : chaque
  * section est indépendante (un échec n'empêche pas les autres). Au remplacement
@@ -187,24 +237,10 @@ async function genererContenus(support) {
   // 4. QCM.
   try {
     const q = await generateOne(client, uploaded.id, SCHEMA_QCM, CONSIGNE_QCM, 'enregistrer_qcm');
-    const [qi] = await db.query('INSERT INTO mm_qcm (idCours, idSupport) VALUES (?,?)', [idCours, idSupport]);
-    const idQcm = qi.insertId;
-    const questions = q.data.questions || [];
-    for (let i = 0; i < questions.length; i++) {
-      const ques = questions[i];
-      const [ri] = await db.query('INSERT INTO mm_qcm_question (idQcm, enonce, ordre) VALUES (?,?,?)', [idQcm, ques.enonce, i]);
-      const idQuestion = ri.insertId;
-      for (const p of ques.propositions || []) {
-        await db.query(
-          `INSERT INTO mm_qcm_proposition (idQuestion, lettre, texte, estCorrecte, explication, diapo)
-           VALUES (?,?,?,?,?,?)`,
-          [idQuestion, p.lettre, p.texte, p.estCorrecte ? 1 : 0, p.explication ?? null, p.diapo ?? null]
-        );
-      }
-    }
+    await insererQcm(idCours, idSupport, q.data.questions || []);
   } catch (e) {
     console.error('Génération QCM KO:', e.message);
   }
 }
 
-module.exports = { genererContenus, hasKey };
+module.exports = { genererContenus, genererQcm, hasKey };

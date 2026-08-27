@@ -4,6 +4,7 @@
 const path = require('path');
 const db = require('../config/db').promise();
 const { maitriseParCours } = require('../services/maitrise');
+const { genererQcm, hasKey } = require('../services/generation');
 
 async function possede(idUtilisateur, idCours) {
   const [rows] = await db.query('SELECT id FROM mm_cours WHERE id = ? AND idUtilisateur = ?', [idCours, idUtilisateur]);
@@ -132,14 +133,63 @@ exports.getQcmHistorique = async (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!(await possede(req.user.id, id))) return res.status(404).json({ error: 'Cours introuvable.' });
+    // Filtre optionnel par QCM (?idQcm=) pour l'historique d'un cartouche précis.
+    const idQcm = req.query.idQcm ? Number(req.query.idQcm) : null;
+    const params = [id, req.user.id];
+    let filtre = '';
+    if (idQcm) { filtre = 'AND idQcm = ?'; params.push(idQcm); }
     const [rows] = await db.query(
-      `SELECT id, palier, finLe, pourcentage, scoreObtenu, scoreTotal, surSupportArchive
-         FROM mm_qcm_tentative WHERE idCours = ? AND idUtilisateur = ?
+      `SELECT id, idQcm, palier, finLe, pourcentage, scoreObtenu, scoreTotal, surSupportArchive
+         FROM mm_qcm_tentative WHERE idCours = ? AND idUtilisateur = ? ${filtre}
         ORDER BY finLe DESC LIMIT 20`,
-      [id, req.user.id]
+      params
     );
     res.json(rows);
   } catch (err) {
     next(err);
+  }
+};
+
+// Liste des QCM du support courant, avec date, nb de tentatives et score max
+// (cartouches de l'onglet QCM). Le plus récent en premier.
+exports.getQcmListe = async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!(await possede(req.user.id, id))) return res.status(404).json({ error: 'Cours introuvable.' });
+    const [rows] = await db.query(
+      `SELECT qc.id, qc.genereLe,
+              COUNT(t.id) AS nbTentatives,
+              MAX(t.pourcentage) AS scoreMax
+         FROM mm_qcm qc
+         JOIN mm_support s ON s.id = qc.idSupport AND s.estCourant = 1
+         LEFT JOIN mm_qcm_tentative t ON t.idQcm = qc.id AND t.idUtilisateur = ?
+        WHERE qc.idCours = ?
+        GROUP BY qc.id, qc.genereLe
+        ORDER BY qc.genereLe DESC, qc.id DESC`,
+      [req.user.id, id]
+    );
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Génère un QCM supplémentaire sur le support courant (garde les anciens). Synchrone.
+exports.genererNouveauQcm = async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!(await possede(req.user.id, id))) return res.status(404).json({ error: 'Cours introuvable.' });
+    if (!hasKey()) return res.status(400).json({ error: 'Génération IA indisponible (clé Anthropic absente).' });
+    const [sup] = await db.query(
+      'SELECT id, idCours, cheminStockage, anthropicFileId FROM mm_support WHERE idCours = ? AND estCourant = 1 LIMIT 1',
+      [id]
+    );
+    if (!sup.length) return res.status(400).json({ error: "Aucun support : dépose d'abord un PDF." });
+    const idQcm = await genererQcm(sup[0]);
+    const [[row]] = await db.query('SELECT genereLe FROM mm_qcm WHERE id = ?', [idQcm]);
+    res.status(201).json({ id: idQcm, genereLe: row?.genereLe ?? null });
+  } catch (err) {
+    console.error('Génération nouveau QCM KO:', err.message);
+    res.status(500).json({ error: 'La génération du QCM a échoué. Réessaie.' });
   }
 };

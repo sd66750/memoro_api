@@ -20,6 +20,8 @@ router.get('/:id/synthese', contenus.getSynthese);
 router.get('/:id/cartes/export', cartes.exportCsv);
 router.get('/:id/cartes', contenus.getCartes);
 router.get('/:id/qcm/tentatives', contenus.getQcmHistorique);
+router.get('/:id/qcm/liste', contenus.getQcmListe);
+router.post('/:id/qcm/generer', contenus.genererNouveauQcm);
 router.get('/:id/qcm', contenus.getQcm);
 router.post('/:id/valider', revisions.valider);
 
