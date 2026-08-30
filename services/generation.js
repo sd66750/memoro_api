@@ -13,6 +13,9 @@ const db = require('../config/db').promise();
 
 // Modèle configurable (défaut = Haiku 4.5, comme HomeFlow) pour le coût/latence.
 const MODEL = process.env.MEMORO_GEN_MODEL || 'claude-haiku-4-5-20251001';
+// QCM : modèle plus fort (défaut Opus 4.8) car la CLÉ DE RÉPONSE doit être juste —
+// Haiku se trompait sur du contenu fin. Volume faible (QCM à la demande) → coût minime.
+const QCM_MODEL = process.env.MEMORO_QCM_MODEL || 'claude-opus-4-8';
 const FILES_BETA = 'files-api-2025-04-14';
 
 const hasKey = () => !!process.env.ANTHROPIC_API_KEY;
@@ -24,7 +27,7 @@ const CONSIGNE_SYNTHESE = `${CONSIGNE_COMMUNE} Produis une fiche de synthèse qu
 
 const CONSIGNE_CARTES = `${CONSIGNE_COMMUNE} Produis des cartes mémo de rappel actif : recto = question courte qui oblige à produire la réponse, verso = réponse, et le numéro de diapositive. Vise 10 à 20 cartes selon la densité du cours.`;
 
-const CONSIGNE_QCM = `${CONSIGNE_COMMUNE} Produis un QCM au format concours français : chaque question a exactement 5 propositions A à E, avec réponses multiples possibles ; pour chaque proposition, indique si elle est correcte, donne une explication et le numéro de diapositive. Vise une dizaine de questions couvrant l'ensemble du cours.`;
+const CONSIGNE_QCM = `${CONSIGNE_COMMUNE} Produis un QCM au format concours français : chaque question a exactement 5 propositions A à E, avec réponses multiples possibles ; pour chaque proposition, indique si elle est correcte, donne une explication et le numéro de diapositive. Vise une dizaine de questions couvrant l'ensemble du cours. RIGUEUR ABSOLUE sur la clé de réponse : ne marque une proposition "correcte" que si son exactitude est EXPLICITEMENT soutenue par le PDF ; au moindre doute, ou si l'information n'est pas dans le cours, marque-la "incorrecte". L'explication doit citer le passage du cours qui justifie le statut et être COHÉRENTE avec lui (une explication qui confirme la proposition ⇒ estCorrecte=vrai). Relis chaque proposition avant de conclure.`;
 
 // QCM supplémentaire (bouton « Générer un nouveau QCM ») : on demande explicitement
 // de varier les questions/angles par rapport au QCM standard.
@@ -112,9 +115,9 @@ const empreinte = (recto) => crypto.createHash('sha256').update(String(recto).tr
 // Sortie structurée via tool-use (portable sur tous les modèles, dont Haiku) :
 // on force l'appel d'un outil dont l'input_schema est le schéma voulu, et on lit
 // directement l'objet `input`. Le PDF est fourni en document (Files API) + cache.
-async function generateOne(client, fileId, schema, consigne, toolName) {
+async function generateOne(client, fileId, schema, consigne, toolName, model = MODEL) {
   const res = await client.beta.messages.create({
-    model: MODEL,
+    model,
     max_tokens: 12000,
     betas: [FILES_BETA],
     tools: [{ name: toolName, description: 'Enregistre le résultat structuré demandé.', input_schema: schema }],
@@ -172,10 +175,10 @@ async function genererQcm(support) {
   let fileId = support.anthropicFileId || (await televerse());
   let q;
   try {
-    q = await generateOne(client, fileId, SCHEMA_QCM, CONSIGNE_QCM_NOUVEAU, 'enregistrer_qcm');
+    q = await generateOne(client, fileId, SCHEMA_QCM, CONSIGNE_QCM_NOUVEAU, 'enregistrer_qcm', QCM_MODEL);
   } catch {
     fileId = await televerse(); // file_id expiré/invalide → nouvelle tentative
-    q = await generateOne(client, fileId, SCHEMA_QCM, CONSIGNE_QCM_NOUVEAU, 'enregistrer_qcm');
+    q = await generateOne(client, fileId, SCHEMA_QCM, CONSIGNE_QCM_NOUVEAU, 'enregistrer_qcm', QCM_MODEL);
   }
   return insererQcm(idCours, idSupport, q.data.questions || []);
 }
@@ -236,7 +239,7 @@ async function genererContenus(support) {
 
   // 4. QCM.
   try {
-    const q = await generateOne(client, uploaded.id, SCHEMA_QCM, CONSIGNE_QCM, 'enregistrer_qcm');
+    const q = await generateOne(client, uploaded.id, SCHEMA_QCM, CONSIGNE_QCM, 'enregistrer_qcm', QCM_MODEL);
     await insererQcm(idCours, idSupport, q.data.questions || []);
   } catch (e) {
     console.error('Génération QCM KO:', e.message);
