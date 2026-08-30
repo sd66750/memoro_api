@@ -15,12 +15,34 @@ const SELECT_BASE = `
     FROM mm_cours c
     LEFT JOIN mm_matiere m ON m.id = c.idMatiere`;
 
+// Liste enrichie (page « Mes cours ») : état des cartes (nouvelles / à revoir /
+// acquises, sur le support courant) et meilleur score QCM + nb de tentatives
+// (support courant, surSupportArchive=0) — pour une visu rapide de l'état de connaissance.
+const SELECT_LISTE = `
+  SELECT c.id, c.idMatiere, c.titre, c.professeur, c.dateCours, c.heureDebut, c.heureFin, c.salle, c.niveauCharge,
+         m.libelle AS matiereLibelle, m.couleur AS matiereCouleur, m.code AS matiereCode,
+         EXISTS(SELECT 1 FROM mm_support s WHERE s.idCours = c.id AND s.estCourant = 1) AS aSupport,
+         (SELECT COUNT(*) FROM mm_carte ca JOIN mm_support s ON s.id=ca.idSupport AND s.estCourant=1 WHERE ca.idCours=c.id) AS nbCartes,
+         (SELECT COUNT(*) FROM mm_carte ca JOIN mm_support s ON s.id=ca.idSupport AND s.estCourant=1
+            LEFT JOIN mm_carte_etat e ON e.idCarte=ca.id AND e.idUtilisateur=c.idUtilisateur
+           WHERE ca.idCours=c.id AND (e.etat IS NULL OR e.etat='nouveau')) AS cartesNouvelles,
+         (SELECT COUNT(*) FROM mm_carte ca JOIN mm_support s ON s.id=ca.idSupport AND s.estCourant=1
+            JOIN mm_carte_etat e ON e.idCarte=ca.id AND e.idUtilisateur=c.idUtilisateur
+           WHERE ca.idCours=c.id AND e.etat<>'nouveau' AND (e.dueLe IS NULL OR e.dueLe<=CURDATE())) AS cartesARevoir,
+         (SELECT COUNT(*) FROM mm_carte ca JOIN mm_support s ON s.id=ca.idSupport AND s.estCourant=1
+            JOIN mm_carte_etat e ON e.idCarte=ca.id AND e.idUtilisateur=c.idUtilisateur
+           WHERE ca.idCours=c.id AND e.etat<>'nouveau' AND e.dueLe>CURDATE()) AS cartesAcquises,
+         (SELECT MAX(t.pourcentage) FROM mm_qcm_tentative t WHERE t.idCours=c.id AND t.idUtilisateur=c.idUtilisateur AND t.surSupportArchive=0) AS qcmMax,
+         (SELECT COUNT(*) FROM mm_qcm_tentative t WHERE t.idCours=c.id AND t.idUtilisateur=c.idUtilisateur AND t.surSupportArchive=0) AS qcmTentatives
+    FROM mm_cours c
+    LEFT JOIN mm_matiere m ON m.id = c.idMatiere`;
+
 exports.getAll = (req, res, next) => {
   const { from, to } = req.query;
   const params = [req.user.id];
   let where = 'c.idUtilisateur = ?';
   if (from && to) { where += ' AND c.dateCours BETWEEN ? AND ?'; params.push(from, to); }
-  const sql = `${SELECT_BASE} WHERE ${where} ORDER BY c.dateCours, c.heureDebut`;
+  const sql = `${SELECT_LISTE} WHERE ${where} ORDER BY c.dateCours, c.heureDebut`;
   db.query(sql, params, (err, data) => {
     if (err) return next(err);
     res.json(data);
