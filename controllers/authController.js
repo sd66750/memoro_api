@@ -32,6 +32,11 @@ function sessionPayload(user, accessToken, refreshToken) {
 
 exports.register = async (req, res, next) => {
   try {
+    // Inscriptions FERMÉES par défaut (comptes créés manuellement). Pour rouvrir :
+    // définir MEMORO_INSCRIPTIONS=open dans l'environnement de l'API.
+    if (process.env.MEMORO_INSCRIPTIONS !== 'open') {
+      return res.status(403).json({ error: 'Les inscriptions sont fermées pour le moment.' });
+    }
     const { email, motDePasse, nomAffiche } = req.body || {};
     if (!email || !motDePasse) {
       return res.status(400).json({ error: 'Email et mot de passe obligatoires.' });
